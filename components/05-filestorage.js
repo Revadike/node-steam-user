@@ -56,7 +56,7 @@ class SteamUserFileStorage extends SteamUserUtility {
 	 */
 	async _readFiles(filenames) {
 		if (!this.storage) {
-			return filenames.map(filename => ({filename, error: new Error('Storage system disabled')}));
+			return filenames.map(filename => ({ filename, error: new Error('Storage system disabled') }));
 		}
 
 		// No need for a try/catch because readFiles can't reject

@@ -166,9 +166,9 @@ class SteamUserApps extends SteamUserAppAuth {
 	 * @returns {Promise}
 	 * @protected
 	 */
-	_saveProductInfo({ apps, packages }) {
+	async _saveProductInfo({ apps, packages }) {
 		if (!this.options.savePicsCache) {
-			return Promise.resolve([]);
+			return [];
 		}
 
 		let toSave = {};
@@ -176,7 +176,7 @@ class SteamUserApps extends SteamUserAppAuth {
 		for (let appid in apps) {
 			// We want to avoid saving apps that are missing a token
 			// Public only apps are weird...
-			if (apps[appid].missingToken && !apps[appid].appinfo.public_only) {
+			if (apps[appid].missingToken && !(apps[appid].appinfo && apps[appid].appinfo.public_only)) {
 				continue;
 			}
 			let filename = `app_info_${appid}.json`;
@@ -193,7 +193,12 @@ class SteamUserApps extends SteamUserAppAuth {
 			toSave[filename] = contents;
 		}
 
-		return this._saveFiles(toSave);
+		try {
+			return await this._saveFiles(toSave);
+		} catch (ex) {
+			this.emit('debug', `Error saving PICS cache to disk: ${ex.message}`);
+			return [];
+		}
 	}
 
 	/**
@@ -271,16 +276,27 @@ class SteamUserApps extends SteamUserAppAuth {
 				if (error || !contents) {
 					response.notCachedApps.push(appid);
 				} else {
-					// Save to memory cache
-					this.picsCache.apps[appid] = JSON.parse(contents);
-					response.apps[appid] = this.picsCache.apps[appid];
+					try {
+						// Save to memory cache
+						this.picsCache.apps[appid] = JSON.parse(contents);
+						response.apps[appid] = this.picsCache.apps[appid];
+					} catch (ex) {
+						// A corrupted cache file shouldn't take down the whole request
+						this.emit('debug', `Error parsing cached app info for ${appid}: ${ex.message}`);
+						response.notCachedApps.push(appid);
+					}
 				}
 			} else if (packageid !== undefined) { // Remember, package ID can be 0
 				if (error || !contents) {
 					response.notCachedPackages.push(packageid);
 				} else {
-					this.picsCache.packages[packageid] = JSON.parse(contents);
-					response.packages[packageid] = this.picsCache.packages[packageid];
+					try {
+						this.picsCache.packages[packageid] = JSON.parse(contents);
+						response.packages[packageid] = this.picsCache.packages[packageid];
+					} catch (ex) {
+						this.emit('debug', `Error parsing cached package info for ${packageid}: ${ex.message}`);
+						response.notCachedPackages.push(packageid);
+					}
 				}
 			} else {
 				this.emit('debug', `Error retrieving origins of file ${filename}`);
@@ -375,11 +391,48 @@ class SteamUserApps extends SteamUserAppAuth {
 
 			// Function to handle response of ClientPICSProductInfoRequest (may be called multiple times)
 			let onResponse = async (body) => {
+				// Some requested apps/packages might not exist, or we might not have access to them. Steam
+				// reports these separately instead of including them in body.apps/body.packages, so we need to
+				// remove them from our "still waiting on" lists here too. Otherwise we'd wait forever (until the
+				// request times out) for data that Steam is never going to send us.
+				(body.unknown_appids || []).forEach((appid) => {
+					if (!response.unknownApps.includes(appid)) {
+						response.unknownApps.push(appid);
+					}
+					let index = appids.indexOf(appid);
+					if (index != -1) {
+						appids.splice(index, 1);
+					}
+				});
+
+				(body.unknown_packageids || []).forEach((packageid) => {
+					if (!response.unknownPackages.includes(packageid)) {
+						response.unknownPackages.push(packageid);
+					}
+					let index = packageids.indexOf(packageid);
+					if (index != -1) {
+						packageids.splice(index, 1);
+					}
+				});
+
 				// If we're using the PICS cache, then add the items in this response to it
 				if (this.options.enablePicsCache) {
 					let cache = this.picsCache;
 					cache.apps = cache.apps || {};
 					cache.packages = cache.packages || {};
+
+					// Remember (in the internal PICS cache only - see the equivalent comment further below for why
+					// we don't also add these to the response we hand back to the caller) that Steam doesn't have
+					// info for these, so that we don't treat them as "not yet fetched" forever. Without this,
+					// every future ownership check would keep re-warning about them (they'd never show up as
+					// cached), and we'd keep re-requesting them from Steam too.
+					(body.unknown_appids || []).forEach((appid) => {
+						cache.apps[appid] = cache.apps[appid] || { sha: null, changenumber: 0, missingToken: false, appinfo: null };
+					});
+
+					(body.unknown_packageids || []).forEach((packageid) => {
+						cache.packages[packageid] = cache.packages[packageid] || { sha: null, changenumber: 0, missingToken: false, packageinfo: null };
+					});
 
 					(body.apps || []).forEach((app) => {
 						let appinfo = null;
@@ -495,8 +548,36 @@ class SteamUserApps extends SteamUserAppAuth {
 					shaList.packages[pkg.packageid] = pkg.sha ? pkg.sha.toString('hex') : null;
 				});
 
-				response.unknownApps = response.unknownApps.concat(body.unknown_appids || []);
-				response.unknownPackages = response.unknownPackages.concat(body.unknown_packageids || []);
+				(body.unknown_appids || []).forEach((appid) => {
+					if (!response.unknownApps.includes(appid)) {
+						response.unknownApps.push(appid);
+					}
+				});
+
+				(body.unknown_packageids || []).forEach((packageid) => {
+					if (!response.unknownPackages.includes(packageid)) {
+						response.unknownPackages.push(packageid);
+					}
+				});
+
+				// Remember (in the internal PICS cache only - not in the response we hand back to the caller,
+				// since the public contract is that unknown ids show up in unknownApps/unknownPackages, not in
+				// apps/packages) that Steam doesn't have info for these, instead of leaving them permanently
+				// absent from the cache. See the equivalent comment in the non-cached onResponse function above
+				// for why that matters.
+				if (this.options.enablePicsCache) {
+					let cache = this.picsCache;
+					cache.apps = cache.apps || {};
+					cache.packages = cache.packages || {};
+
+					(body.unknown_appids || []).forEach((appid) => {
+						cache.apps[appid] = cache.apps[appid] || { sha: null, changenumber: 0, missingToken: false, appinfo: null };
+					});
+
+					(body.unknown_packageids || []).forEach((packageid) => {
+						cache.packages[packageid] = cache.packages[packageid] || { sha: null, changenumber: 0, missingToken: false, packageinfo: null };
+					});
+				}
 
 				let appTotal = Object.keys(shaList.apps).length + response.unknownApps.length;
 				let packageTotal = Object.keys(shaList.packages).length + response.unknownPackages.length;
@@ -776,18 +857,21 @@ class SteamUserApps extends SteamUserAppAuth {
 		let index = -1;
 		for (let appid in appTokens) {
 			if (Object.hasOwnProperty.call(appTokens, appid) && (index = ourApps.indexOf(parseInt(appid, 10))) != -1) {
-				ourApps[index] = {appid: parseInt(appid, 10), access_token: appTokens[appid]};
+				ourApps[index] = { appid: parseInt(appid, 10), access_token: appTokens[appid] };
 			}
 		}
 
 		for (let packageid in packageTokens) {
 			if (Object.hasOwnProperty.call(packageTokens, packageid) && (index = ourPackages.indexOf(parseInt(packageid, 10))) != -1) {
-				ourPackages[index] = {packageid: parseInt(packageid, 10), access_token: packageTokens[packageid]};
+				ourPackages[index] = { packageid: parseInt(packageid, 10), access_token: packageTokens[packageid] };
 			}
 		}
 
-		// Add a no-op catch in case there's some kind of error
-		let { packages } = await this.getProductInfo(ourApps, ourPackages, false, null, PICSRequestType.Changelist).catch(() => {
+		// Fall back to an empty package list in case there's some kind of error. Note: the fallback must be an
+		// object with a "packages" key, or the destructure below throws (since it can't destructure undefined).
+		let { packages } = await this.getProductInfo(ourApps, ourPackages, false, null, PICSRequestType.Changelist).catch((ex) => {
+			this.emit('debug', `Error retrieving product info for changelist packages: ${ex.message}`);
+			return { packages: {} };
 		});
 
 		// Request info for all the apps in these packages
@@ -835,6 +919,48 @@ class SteamUserApps extends SteamUserAppAuth {
 		if (!this.picsCache.ownershipModified) {
 			throw new Error('No data in PICS package cache yet.');
 		}
+	}
+
+	/**
+	 * Same as _warn(), but only emits a given message once for the lifetime of this client. Ownership checks
+	 * (ownsApp, ownsDepot, getOwnedApps, getOwnedDepots, and filtered getOwnedPackages calls) recompute their
+	 * result from scratch on every call and aren't cached, so a single package that's missing PICS info would
+	 * otherwise produce the same warning over and over if the caller checks ownership of many things in a loop.
+	 * @param {string} message
+	 * @protected
+	 */
+	_warnOnce(message) {
+		this._warnedMessages = this._warnedMessages || new Set();
+		if (this._warnedMessages.has(message)) {
+			return;
+		}
+
+		this._warnedMessages.add(message);
+		this._warn(message);
+	}
+
+	/**
+	 * Look up a package's packageinfo in the PICS cache, warning (at most once per distinct message) if it isn't
+	 * available. Shared by getOwnedApps, getOwnedDepots, and the ownership filter function, which all previously
+	 * had their own copy of this same not-in-cache/no-package-info check.
+	 * @param {int} packageid
+	 * @param {string} context - Used in the warning message, e.g. 'get owned apps for', 'filter'
+	 * @returns {object|null} - packageinfo, or null if it isn't available
+	 * @protected
+	 */
+	_getCachedPackageInfo(packageid, context) {
+		let cached = this.picsCache.packages[packageid];
+		if (!cached) {
+			this._warnOnce(`Failed to ${context} package ${packageid}: not in cache`);
+			return null;
+		}
+
+		if (!cached.packageinfo) {
+			this._warnOnce(`Failed to ${context} package ${packageid}: no package info`);
+			return null;
+		}
+
+		return cached.packageinfo;
 	}
 
 	/**
@@ -899,21 +1025,13 @@ class SteamUserApps extends SteamUserAppAuth {
 		let ownedPackages = this.getOwnedPackages(filter);
 		let appids = {};
 
-		ownedPackages.forEach((pkg) => {
-			let pkgid = pkg;
-			if (!this.picsCache.packages[pkgid]) {
-				this._warn(`Failed to get owned apps for package ${pkgid}: not in cache`);
+		ownedPackages.forEach((pkgid) => {
+			let packageinfo = this._getCachedPackageInfo(pkgid, 'get owned apps for');
+			if (!packageinfo) {
 				return;
 			}
 
-			pkg = this.picsCache.packages[pkgid];
-			if (!pkg.packageinfo) {
-				this._warn(`Failed to get owned apps for package ${pkgid}: no package info`);
-				return;
-			}
-
-			pkg = pkg.packageinfo;
-			(pkg.appids || []).forEach((appid) => {
+			(packageinfo.appids || []).forEach((appid) => {
 				if (!appids[appid]) {
 					appids[appid] = true;
 				}
@@ -948,21 +1066,13 @@ class SteamUserApps extends SteamUserAppAuth {
 		let ownedPackages = this.getOwnedPackages(filter);
 		let depotids = {};
 
-		ownedPackages.forEach((pkg) => {
-			let pkgid = pkg;
-			if (!this.picsCache.packages[pkgid]) {
-				this._warn(`Failed to get owned depots for package ${pkgid}: not in cache`);
+		ownedPackages.forEach((pkgid) => {
+			let packageinfo = this._getCachedPackageInfo(pkgid, 'get owned depots for');
+			if (!packageinfo) {
 				return;
 			}
 
-			pkg = this.picsCache.packages[pkgid];
-			if (!pkg.packageinfo) {
-				this._warn(`Failed to get owned depots for package ${pkgid}: no package info`);
-				return;
-			}
-
-			pkg = pkg.packageinfo;
-			(pkg.depotids || []).forEach(function (depotid) {
+			(packageinfo.depotids || []).forEach((depotid) => {
 				if (!depotids[depotid]) {
 					depotids[depotid] = true;
 				}
@@ -1086,13 +1196,10 @@ class SteamUserApps extends SteamUserAppAuth {
 					return false;
 				}
 
-				let id = license.package_id;
-				if (!this.picsCache.packages[id] || !this.picsCache.packages[id].packageinfo) {
-					this._warn(`Failed to filter package ${id} (no PICS cache info available)`);
+				let pkg = this._getCachedPackageInfo(license.package_id, 'filter');
+				if (!pkg) {
 					return false;
 				}
-
-				let pkg = this.picsCache.packages[id].packageinfo;
 
 				// If exclude all free (sub 0 is covered by NoCost)
 				if (filter.excludeFree && freeLicenseBillingTypes.includes(pkg.billingtype)) {
@@ -1158,7 +1265,7 @@ class SteamUserApps extends SteamUserAppAuth {
 	 */
 	redeemKey(key, callback) {
 		return StdLib.Promises.timeoutCallbackPromise(90000, ['purchaseResultDetails', 'packageList'], callback, (resolve, reject) => {
-			this._send(EMsg.ClientRegisterKey, {key: key}, (body) => {
+			this._send(EMsg.ClientRegisterKey, { key: key }, (body) => {
 				let packageList = {};
 
 				let receiptDetails = BinaryKVParser.parse(body.purchase_receipt_info).MessageObject;

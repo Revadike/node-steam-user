@@ -1357,7 +1357,7 @@ class SteamUserApps extends SteamUserAppAuth {
 	}
 }
 
-SteamUserBase.prototype._handlerManager.add(EMsg.ClientLicenseList, function (body) {
+SteamUserBase.prototype._handlerManager.add(EMsg.ClientLicenseList, function(body) {
 	this.emit('licenses', body.licenses);
 	this.licenses = body.licenses;
 
@@ -1365,7 +1365,7 @@ SteamUserBase.prototype._handlerManager.add(EMsg.ClientLicenseList, function (bo
 	this._getLicenseInfo();
 });
 
-SteamUserBase.prototype._handlerManager.add(EMsg.ClientPlayingSessionState, function (body) {
+SteamUserBase.prototype._handlerManager.add(EMsg.ClientPlayingSessionState, function(body) {
 	this._playingBlocked = body.playing_blocked;
 	this.emit('playingState', body.playing_blocked, body.playing_app);
 	this.playingState = { blocked: body.playing_blocked, appid: body.playing_app };

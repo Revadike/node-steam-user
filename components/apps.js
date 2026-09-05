@@ -493,10 +493,10 @@ class SteamUserApps extends SteamUserAppAuth {
 					appInfoVdf = appInfoVdf.replace(/\0$/, '');
 
 					response.apps[app.appid] = app._parsedData || {
-						"sha": app.sha ? app.sha.toString('hex') : null,
-						"changenumber": app.change_number,
-						"missingToken": !!app.missing_token,
-						"appinfo": VDF.parse(appInfoVdf).appinfo
+						sha: app.sha ? app.sha.toString('hex') : null,
+						changenumber: app.change_number,
+						missingToken: !!app.missing_token,
+						appinfo: VDF.parse(appInfoVdf).appinfo
 					};
 
 					let index = appids.indexOf(app.appid);
@@ -507,10 +507,10 @@ class SteamUserApps extends SteamUserAppAuth {
 
 				(body.packages || []).forEach((pkg) => {
 					response.packages[pkg.packageid] = pkg._parsedData || {
-						"sha": pkg.sha ? pkg.sha.toString('hex') : null,
-						"changenumber": pkg.change_number,
-						"missingToken": !!pkg.missing_token,
-						"packageinfo": pkg.buffer ? BinaryKVParser.parse(pkg.buffer)[pkg.packageid] : null
+						sha: pkg.sha ? pkg.sha.toString('hex') : null,
+						changenumber: pkg.change_number,
+						missingToken: !!pkg.missing_token,
+						packageinfo: pkg.buffer ? BinaryKVParser.parse(pkg.buffer)[pkg.packageid] : null
 					};
 
 					let index = packageids.indexOf(pkg.packageid);
@@ -527,7 +527,7 @@ class SteamUserApps extends SteamUserAppAuth {
 						packages: Object.assign(cached.packages, response.packages),
 						unknownApps: response.unknownApps,
 						unknownPackages: response.unknownPackages
-					}
+					};
 					return resolve(combined);
 				}
 			};
@@ -607,7 +607,7 @@ class SteamUserApps extends SteamUserAppAuth {
 							packages: Object.assign(cached.packages, response.packages),
 							unknownApps: response.unknownApps,
 							unknownPackages: response.unknownPackages
-						}
+						};
 						return resolve(combined);
 					}
 
@@ -704,7 +704,7 @@ class SteamUserApps extends SteamUserAppAuth {
 						packages: Object.assign(response.packages, result.packages),
 						unknownApps: response.unknownApps.concat(result.unknownApps),
 						unknownPackages: response.unknownPackages.concat(result.unknownPackages)
-					}
+					};
 				}
 				for (let i = 0; i < apps.length; i += chunkSize) {
 					let appsChunk = apps.slice(i, i + chunkSize);
@@ -714,7 +714,7 @@ class SteamUserApps extends SteamUserAppAuth {
 						packages: Object.assign(response.packages, result.packages),
 						unknownApps: response.unknownApps.concat(result.unknownApps),
 						unknownPackages: response.unknownPackages.concat(result.unknownPackages)
-					}
+					};
 				}
 				resolve(response);
 			} catch (ex) {
@@ -1357,7 +1357,7 @@ class SteamUserApps extends SteamUserAppAuth {
 	}
 }
 
-SteamUserBase.prototype._handlerManager.add(EMsg.ClientLicenseList, function (body) {
+SteamUserBase.prototype._handlerManager.add(EMsg.ClientLicenseList, function(body) {
 	this.emit('licenses', body.licenses);
 	this.licenses = body.licenses;
 
@@ -1365,7 +1365,7 @@ SteamUserBase.prototype._handlerManager.add(EMsg.ClientLicenseList, function (bo
 	this._getLicenseInfo();
 });
 
-SteamUserBase.prototype._handlerManager.add(EMsg.ClientPlayingSessionState, function (body) {
+SteamUserBase.prototype._handlerManager.add(EMsg.ClientPlayingSessionState, function(body) {
 	this._playingBlocked = body.playing_blocked;
 	this.emit('playingState', body.playing_blocked, body.playing_app);
 	this.playingState = { blocked: body.playing_blocked, appid: body.playing_app };

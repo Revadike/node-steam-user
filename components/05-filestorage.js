@@ -28,7 +28,7 @@ class SteamUserFileStorage extends SteamUserUtility {
 		}
 
 		return await this.storage.saveFiles(files);
-	};
+	}
 
 	/**
 	 * @param {string} filename
